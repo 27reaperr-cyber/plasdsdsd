@@ -3,9 +3,9 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install Java (OpenJDK 17+) and required dependencies
+# Install Java (OpenJDK 21) and required dependencies
 RUN apt-get update && apt-get install -y \
-    openjdk-17-jre-headless \
+    openjdk-21-jre-headless \
     curl \
     wget \
     && rm -rf /var/lib/apt/lists/*
