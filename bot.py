@@ -268,7 +268,24 @@ Starting server...'''
                     reply_markup=keyboard
                 )
             else:
-                await query.answer('Failed to create server', show_alert=True)
+                error_text = f'''❌ Failed to create server
+
+Type: {server_type.capitalize()}
+
+This may be due to:
+• Network connectivity issues
+• API rate limiting
+• Invalid server type
+
+Please try again later or select a different type.'''
+                
+                text, keyboard = BotUI.create_server_menu()
+                await query.edit_message_text(text=error_text)
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text='⚙️ Minecraft Server Manager\n\nTry creating another server:',
+                    reply_markup=keyboard
+                )
     
     except Exception as e:
         logger.error(f"Error in button callback: {e}")

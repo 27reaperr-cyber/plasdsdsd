@@ -73,9 +73,12 @@ class ServerManager:
         try:
             logger.info("Downloading PaperMC server list...")
             
+            headers = {'User-Agent': 'Mozilla/5.0 (Minecraft Server Manager Bot)'}
+            
             # Get latest build
             response = requests.get(
-                'https://papermc.io/api/v2/projects/paper/versions',
+                'https://api.papermc.io/v2/projects/paper/versions',
+                headers=headers,
                 timeout=10
             )
             response.raise_for_status()
@@ -84,19 +87,29 @@ class ServerManager:
             
             # Get latest build for this version
             response = requests.get(
-                f'https://papermc.io/api/v2/projects/paper/versions/{latest_version}/builds',
+                f'https://api.papermc.io/v2/projects/paper/versions/{latest_version}/builds',
+                headers=headers,
                 timeout=10
             )
             response.raise_for_status()
             builds = response.json()['builds']
             latest_build = builds[-1]['build']
             
+            # Get download info
+            response = requests.get(
+                f'https://api.papermc.io/v2/projects/paper/versions/{latest_version}/builds/{latest_build}',
+                headers=headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            downloads = response.json()['downloads']
+            jar_name = list(downloads.keys())[0]
+            
             # Download JAR
-            jar_name = f"paper-{latest_version}-{latest_build}.jar"
-            jar_url = f'https://papermc.io/api/v2/projects/paper/versions/{latest_version}/builds/{latest_build}/downloads/{jar_name}'
+            jar_url = f'https://api.papermc.io/v2/projects/paper/versions/{latest_version}/builds/{latest_build}/downloads/{jar_name}'
             
             logger.info(f"Downloading {jar_url}...")
-            response = requests.get(jar_url, timeout=30)
+            response = requests.get(jar_url, headers=headers, timeout=30)
             response.raise_for_status()
             
             jar_path = server_path / 'server.jar'
@@ -114,24 +127,46 @@ class ServerManager:
         try:
             logger.info("Downloading Vanilla server...")
             
-            # Get launcher manifest
+            headers = {'User-Agent': 'Mozilla/5.0 (Minecraft Server Manager Bot)'}
+            
+            # Get version manifest
             response = requests.get(
-                'https://launcher.mojang.com/v1/objects/index.json',
+                'https://launcher.mojang.com/v1/objects/version_manifest.json',
+                headers=headers,
                 timeout=10
             )
             response.raise_for_status()
-            
-            manifest_url = response.json()['latest']['release']
-            response = requests.get(manifest_url, timeout=10)
-            response.raise_for_status()
             manifest = response.json()
             
+            # Get latest release version
+            latest_version = manifest['latest']['release']
+            
+            # Find version info
+            version_info = None
+            for version in manifest['versions']:
+                if version['id'] == latest_version:
+                    version_info = version
+                    break
+            
+            if not version_info:
+                logger.error(f"Version {latest_version} not found")
+                return None
+            
+            # Get version metadata
+            response = requests.get(
+                version_info['url'],
+                headers=headers,
+                timeout=10
+            )
+            response.raise_for_status()
+            version_meta = response.json()
+            
             # Get server.jar download
-            server_jar_info = manifest['downloads']['server']
+            server_jar_info = version_meta['downloads']['server']
             jar_url = server_jar_info['url']
             
             logger.info(f"Downloading {jar_url}...")
-            response = requests.get(jar_url, timeout=30)
+            response = requests.get(jar_url, headers=headers, timeout=30)
             response.raise_for_status()
             
             jar_path = server_path / 'server.jar'
