@@ -1,8 +1,9 @@
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from config import BOT_TOKEN, SERVER_TYPES
-from utils import init_database, register_user, get_user, get_server_status
+from utils import init_database, register_user, get_user, get_server_status, load_servers_config
 from server_manager import ServerManager
 
 # Configure logging
@@ -67,45 +68,54 @@ Running: {running_servers}'''
     @staticmethod
     def server_detail_menu(server_name: str) -> tuple:
         """Get server detail menu."""
-        servers = server_manager.get_servers()
-        
-        if server_name not in servers:
-            text = 'Server not found'
+        try:
+            servers = server_manager.get_servers()
+            
+            if server_name not in servers:
+                logger.warning(f"Server {server_name} not found in config")
+                text = f'❌ Server "{server_name}" not found\n\nThe server may have been deleted.'
+                keyboard = [
+                    [InlineKeyboardButton('Back to Servers', callback_data='menu_servers')]
+                ]
+                return text, InlineKeyboardMarkup(keyboard)
+            
+            server = servers[server_name]
+            status = get_server_status(server)
+            status_text = '▶️ running' if status == 'running' else '⏹️ stopped'
+            
+            text = f'''Server: {server_name}
+Status: {status_text}
+Port: {server.get('port', 'N/A')}
+Type: {server.get('type', 'N/A').capitalize()}'''
+            
+            keyboard = []
+            
+            if status == 'running':
+                keyboard.append([
+                    InlineKeyboardButton('Stop', callback_data=f'action_stop_{server_name}'),
+                    InlineKeyboardButton('Restart', callback_data=f'action_restart_{server_name}')
+                ])
+            else:
+                keyboard.append([
+                    InlineKeyboardButton('Start', callback_data=f'action_start_{server_name}')
+                ])
+            
+            keyboard.extend([
+                [
+                    InlineKeyboardButton('Logs', callback_data=f'action_logs_{server_name}'),
+                    InlineKeyboardButton('Delete', callback_data=f'action_delete_{server_name}')
+                ],
+                [InlineKeyboardButton('Back', callback_data='menu_servers')]
+            ])
+            
+            return text, InlineKeyboardMarkup(keyboard)
+        except Exception as e:
+            logger.error(f"Error in server_detail_menu: {e}")
+            text = f'❌ Error loading server details'
             keyboard = [
                 [InlineKeyboardButton('Back', callback_data='menu_servers')]
             ]
             return text, InlineKeyboardMarkup(keyboard)
-        
-        server = servers[server_name]
-        status = get_server_status(server)
-        status_text = '▶️ running' if status == 'running' else '⏹️ stopped'
-        
-        text = f'''Server: {server_name}
-Status: {status_text}
-Port: {server.get('port', 'N/A')}
-Type: {server.get('type', 'N/A').capitalize()}'''
-        
-        keyboard = []
-        
-        if status == 'running':
-            keyboard.append([
-                InlineKeyboardButton('Stop', callback_data=f'action_stop_{server_name}'),
-                InlineKeyboardButton('Restart', callback_data=f'action_restart_{server_name}')
-            ])
-        else:
-            keyboard.append([
-                InlineKeyboardButton('Start', callback_data=f'action_start_{server_name}')
-            ])
-        
-        keyboard.extend([
-            [
-                InlineKeyboardButton('Logs', callback_data=f'action_logs_{server_name}'),
-                InlineKeyboardButton('Delete', callback_data=f'action_delete_{server_name}')
-            ],
-            [InlineKeyboardButton('Back', callback_data='menu_servers')]
-        ])
-        
-        return text, InlineKeyboardMarkup(keyboard)
     
     @staticmethod
     def create_server_menu() -> tuple:
@@ -239,34 +249,57 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 # Get IP address
                 ip = server_manager.get_available_ip()
                 port = server.get('port', 25565)
+                server_type_name = server.get("type", "").capitalize()
                 
                 info_text = f'''✅ Server Created!
 
 Name: {server_name}
-Type: {server.get("type", "").capitalize()}
+Type: {server_type_name}
 Address: {ip}:{port}
 Port: {port}
 Status: created
 
 Starting server...'''
                 
-                text, keyboard = BotUI.main_menu()
                 await query.edit_message_text(text=info_text)
                 
                 # Start the server
-                if server_manager.start_server(server_name):
-                    info_text += '\n✅ Server started!'
-                    await context.bot.send_message(
-                        chat_id=user.id,
-                        text=info_text
-                    )
+                start_success = server_manager.start_server(server_name)
                 
-                text, keyboard = BotUI.main_menu()
+                if start_success:
+                    info_text += '\n✅ Server started!'
+                else:
+                    info_text += '\n⚠️ Server created but failed to start'
+                
                 await context.bot.send_message(
                     chat_id=user.id,
-                    text=text,
-                    reply_markup=keyboard
+                    text=info_text
                 )
+                
+                # Wait a moment for config file to sync
+                await asyncio.sleep(0.5)
+                
+                # Refresh server list from disk
+                all_servers = load_servers_config()
+                
+                # Verify server was saved
+                if server_name in all_servers:
+                    # Show server detail menu directly
+                    text, keyboard = BotUI.server_detail_menu(server_name)
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=text,
+                        reply_markup=keyboard
+                    )
+                else:
+                    logger.warning(f"Server {server_name} not found in config after creation")
+                    # Show main menu as fallback
+                    text, keyboard = BotUI.main_menu()
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=text,
+                        reply_markup=keyboard
+                    )
             else:
                 error_text = f'''❌ Failed to create server
 
